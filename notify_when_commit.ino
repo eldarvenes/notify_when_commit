@@ -12,7 +12,7 @@ const char wifi_ssid[] = WIFI_SSID;
 const char wifi_password[] = WIFI_PASSWORD;
 
 ESP8266WiFiMulti wifiMulti;
-const uint32_t connectTimeoutMs = 5000;
+const uint32_t connectTimeoutMs = 10000;
 
 const char endpoint[] = ENDPOINT;
 const String token = TOKEN;
@@ -23,70 +23,123 @@ WiFiClientSecure client;
 HTTPClient httpsClient;
 
 StaticJsonDocument<16> filter_sha;
-StaticJsonDocument<64> doc;
+//StaticJsonDocument<64> doc;
 
 const uint8_t BUZZER = 4;
+const uint8_t BUTTON = 14;
 const uint8_t WIFI_LED = 5;
 const uint8_t COMMIT_LED_PROD = 15;
 const uint8_t COMMIT_LED_TEST = 13;
 const uint8_t COMMIT_LED_SYSTEST = 12;
+
+bool isMuted = false;
+int buttonState;
+int lastButtonState = LOW;
+
+long lastDebounceTime = 0;
+long debounceDelay = 50;
+
 
 // wifi status
 int status = WL_IDLE_STATUS;
 
 void setup()
 {
-    Serial.begin(9600);
+  Serial.begin(9600);
 
-    // turn off build in led
-    pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, HIGH);
-    
-    pinMode(BUZZER, OUTPUT);
-    pinMode(WIFI_LED, OUTPUT);
-    pinMode(COMMIT_LED_PROD, OUTPUT);
-    pinMode(COMMIT_LED_TEST, OUTPUT);
-    pinMode(COMMIT_LED_SYSTEST, OUTPUT);
+  // turn off build in led
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+
+  pinMode(BUZZER, OUTPUT);
+  pinMode(BUTTON, INPUT);
+  pinMode(WIFI_LED, OUTPUT);
+  pinMode(COMMIT_LED_PROD, OUTPUT);
+  pinMode(COMMIT_LED_TEST, OUTPUT);
+  pinMode(COMMIT_LED_SYSTEST, OUTPUT);
 
 
-    WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_STA);
 
-    wifiMulti.addAP(wifi_ssid, wifi_password);
-    filter_sha["sha"] = true;
-    client.setInsecure();
+  wifiMulti.addAP(wifi_ssid, wifi_password);
+  filter_sha["sha"] = true;
+  client.setInsecure();
 }
 
-void loop()
-{ 
-if (wifiMulti.run(connectTimeoutMs) == WL_CONNECTED) {
-    Serial.print("WiFi connected: ");
-    Serial.print(WiFi.SSID());
-    Serial.print(" ");
-    Serial.println(WiFi.localIP());
-    digitalWrite(WIFI_LED, HIGH);
- 
-    handleAction(whatNamespace(checkRepo()));
+unsigned long previousMillis = 0;
+const long interval = 5000;
 
+void loop() {
+  unsigned long currentMillis = millis();
+
+  checkButtonState();
+  
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+
+    if (wifiMulti.run(connectTimeoutMs) == WL_CONNECTED) {
+      Serial.print("WiFi connected: ");
+      Serial.print(WiFi.SSID());
+      Serial.print(" ");
+      Serial.println(WiFi.localIP());
+      digitalWrite(WIFI_LED, HIGH);
+
+      handleAction(whatNamespace(checkRepo()));
     } else {
-    Serial.println("WiFi not connected!");
+      Serial.println("WiFi not connected!");
+    }
   }
-    delay(5000);
+}
+
+void checkButtonState() {
+  int reading = digitalRead(BUTTON);
+
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      if (buttonState == HIGH) {
+        Serial.println("HIGH");
+        if(isMuted == false) {
+          flashLed(COMMIT_LED_PROD);
+          isMuted = true;
+          Serial.println("MUTE");
+          flashLed(COMMIT_LED_PROD);
+        }else {
+          isMuted = false;
+          playPRODSound();
+          Serial.println("NOT MUTE");
+        }
+      }
+    }
+  }
+  lastButtonState = reading;
 }
 
 String checkRepo() {
+  blinkWifi();
   httpsClient.useHTTP10(true);
   httpsClient.begin(client, endpoint);
-    httpsClient.addHeader("Authorization", "token " + token);
-    int httpCode = httpsClient.GET();
-    Serial.println(httpCode);
-    //String payload* = httpsClient.getString();
-    //Serial.println(payload);
-    DynamicJsonDocument doc(16*1024);
+  httpsClient.addHeader("Authorization", "token " + token);
+  int httpCode = httpsClient.GET();
+  Serial.println(httpCode);
+  //String payload* = httpsClient.getString();
+  //Serial.println(payload);
+  DynamicJsonDocument doc(6144);
+  Serial.println(doc.capacity());
   DeserializationError error = deserializeJson(doc, httpsClient.getStream());
 
   if (error) {
     Serial.print("deserializeJson() failed: ");
     Serial.println(error.c_str());
+    flashLed(COMMIT_LED_TEST);
+    flashLed(COMMIT_LED_PROD);
+    flashLed(COMMIT_LED_SYSTEST);
     return "<error>";
   }
 
@@ -104,16 +157,21 @@ String checkRepo() {
 
 void handleAction(Namespace nameSpace) {
   if (nameSpace == TEST) {
-    playCommitSound();
+    if (!isMuted) {
+    playTESTSound();
+    }
     flashLed(COMMIT_LED_TEST);
   }
   if (nameSpace == PROD) {
-    playCommitSound();
-    Serial.println("PROD");
+    if (!isMuted) {
+      playPRODSound();
+    }
     flashLed(COMMIT_LED_PROD);
   }
   if (nameSpace == SYSTEST) {
-    playCommitSound();
+    if (!isMuted) {
+    playSYSTESTSound();
+    }
     flashLed(COMMIT_LED_SYSTEST);
   }
   if (nameSpace == NONE) {
@@ -128,7 +186,15 @@ void flashLed(int led) {
     delay(150);
   }
 }
-void playCommitSound() {
+
+void blinkWifi() {
+  digitalWrite(WIFI_LED, LOW);
+  delay(150);
+  digitalWrite(WIFI_LED, HIGH);
+  delay(150);
+}
+
+void playTESTSound() {
   tone(BUZZER, NOTE_E4);
   delay(150);
   tone(BUZZER, NOTE_G4);
@@ -140,6 +206,16 @@ void playCommitSound() {
   tone(BUZZER, NOTE_D5);
   delay(150);
   tone(BUZZER, NOTE_G5);
+  delay(150);
+  noTone(BUZZER);
+}
+
+void playSYSTESTSound() {
+  tone(BUZZER, NOTE_E4);
+  delay(150);
+  tone(BUZZER, NOTE_G4);
+  delay(150);
+  tone(BUZZER, NOTE_E5);
   delay(150);
   noTone(BUZZER);
 }
@@ -160,10 +236,8 @@ boolean checkForCommits(String sha) {
   }
 }
 
-void playBuzzer() {
-  tone(BUZZER, 1000);
-  delay(750);
-  noTone(BUZZER);
+void toggleMute() {
+  isMuted = !isMuted;
 }
 
 Namespace whatNamespace(String filename) {
@@ -181,5 +255,103 @@ Namespace whatNamespace(String filename) {
   }
   if (filename.indexOf("no commit") >= 0) {
     return NONE;
+  }
+}
+
+int tempo = 80;
+int melody[] = {
+
+  NOTE_D4, -8, NOTE_G4, 16, NOTE_C5, -4,
+  NOTE_B4, 8, NOTE_G4, -16, NOTE_E4, -16, NOTE_A4, -16,
+  NOTE_D5, 2,
+
+};
+
+int notes = sizeof(melody) / sizeof(melody[0]) / 2;
+int wholenote = (60000 * 4) / tempo;
+int divider = 0, noteDuration = 0;
+
+void playPRODSound() {
+  for (int thisNote = 0; thisNote < notes * 2; thisNote = thisNote + 2) {
+
+    // calculates the duration of each note
+    divider = melody[thisNote + 1];
+    if (divider > 0) {
+      // regular note, just proceed
+      noteDuration = (wholenote) / divider;
+    } else if (divider < 0) {
+      // dotted notes are represented with negative durations!!
+      noteDuration = (wholenote) / abs(divider);
+      noteDuration *= 1.5; // increases the duration in half for dotted notes
+    }
+
+    // we only play the note for 90% of the duration, leaving 10% as a pause
+    tone(BUZZER, melody[thisNote], noteDuration * 0.9);
+
+    // Wait for the specief duration before playing the next note.
+    delay(noteDuration);
+
+    // stop the waveform generation before the next note.
+    noTone(BUZZER);
+  }
+}
+
+void playBUZZERSound() {
+  int melody[] = {
+
+
+    NOTE_E5, 4,  NOTE_B4, 8,  NOTE_C5, 8,  NOTE_D5, 4,  NOTE_C5, 8,  NOTE_B4, 8,
+    NOTE_A4, 4,  NOTE_A4, 8,  NOTE_C5, 8,  NOTE_E5, 4,  NOTE_D5, 8,  NOTE_C5, 8,
+    NOTE_B4, -4,  NOTE_C5, 8,  NOTE_D5, 4,  NOTE_E5, 4,
+    NOTE_C5, 4,  NOTE_A4, 4,  NOTE_A4, 8,  NOTE_A4, 4,  NOTE_B4, 8,  NOTE_C5, 8,
+
+    NOTE_D5, -4,  NOTE_F5, 8,  NOTE_A5, 4,  NOTE_G5, 8,  NOTE_F5, 8,
+    NOTE_E5, -4,  NOTE_C5, 8,  NOTE_E5, 4,  NOTE_D5, 8,  NOTE_C5, 8,
+    NOTE_B4, 4,  NOTE_B4, 8,  NOTE_C5, 8,  NOTE_D5, 4,  NOTE_E5, 4,
+    NOTE_C5, 4,  NOTE_A4, 4,  NOTE_A4, 4, REST, 4,
+
+    NOTE_E5, 4,  NOTE_B4, 8,  NOTE_C5, 8,  NOTE_D5, 4,  NOTE_C5, 8,  NOTE_B4, 8,
+    NOTE_A4, 4,  NOTE_A4, 8,  NOTE_C5, 8,  NOTE_E5, 4,  NOTE_D5, 8,  NOTE_C5, 8,
+    NOTE_B4, -4,  NOTE_C5, 8,  NOTE_D5, 4,  NOTE_E5, 4,
+    NOTE_C5, 4,  NOTE_A4, 4,  NOTE_A4, 8,  NOTE_A4, 4,  NOTE_B4, 8,  NOTE_C5, 8,
+
+    NOTE_D5, -4,  NOTE_F5, 8,  NOTE_A5, 4,  NOTE_G5, 8,  NOTE_F5, 8,
+    NOTE_E5, -4,  NOTE_C5, 8,  NOTE_E5, 4,  NOTE_D5, 8,  NOTE_C5, 8,
+    NOTE_B4, 4,  NOTE_B4, 8,  NOTE_C5, 8,  NOTE_D5, 4,  NOTE_E5, 4,
+    NOTE_C5, 4,  NOTE_A4, 4,  NOTE_A4, 4, REST, 4,
+
+
+    NOTE_E5, 2,  NOTE_C5, 2,
+    NOTE_D5, 2,   NOTE_B4, 2,
+    NOTE_C5, 2,   NOTE_A4, 2,
+    NOTE_GS4, 2,  NOTE_B4, 4,  REST, 8,
+    NOTE_E5, 2,   NOTE_C5, 2,
+    NOTE_D5, 2,   NOTE_B4, 2,
+    NOTE_C5, 4,   NOTE_E5, 4,  NOTE_A5, 2,
+    NOTE_GS5, 2,
+
+  };
+  for (int thisNote = 0; thisNote < notes * 2; thisNote = thisNote + 2) {
+
+    // calculates the duration of each note
+    divider = melody[thisNote + 1];
+    if (divider > 0) {
+      // regular note, just proceed
+      noteDuration = (wholenote) / divider;
+    } else if (divider < 0) {
+      // dotted notes are represented with negative durations!!
+      noteDuration = (wholenote) / abs(divider);
+      noteDuration *= 1.5; // increases the duration in half for dotted notes
+    }
+
+    // we only play the note for 90% of the duration, leaving 10% as a pause
+    tone(BUZZER, melody[thisNote], noteDuration * 0.9);
+
+    // Wait for the specief duration before playing the next note.
+    delay(noteDuration);
+
+    // stop the waveform generation before the next note.
+    noTone(BUZZER);
+
   }
 }
