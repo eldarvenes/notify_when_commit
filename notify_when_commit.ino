@@ -27,7 +27,9 @@ StaticJsonDocument<64> doc;
 
 const uint8_t BUZZER = 4;
 const uint8_t WIFI_LED = 5;
-const uint8_t COMMIT_LED = 12;
+const uint8_t COMMIT_LED_PROD = 15;
+const uint8_t COMMIT_LED_TEST = 13;
+const uint8_t COMMIT_LED_SYSTEST = 12;
 
 // wifi status
 int status = WL_IDLE_STATUS;
@@ -42,7 +44,10 @@ void setup()
     
     pinMode(BUZZER, OUTPUT);
     pinMode(WIFI_LED, OUTPUT);
-    pinMode(COMMIT_LED, OUTPUT);
+    pinMode(COMMIT_LED_PROD, OUTPUT);
+    pinMode(COMMIT_LED_TEST, OUTPUT);
+    pinMode(COMMIT_LED_SYSTEST, OUTPUT);
+
 
     WiFi.mode(WIFI_STA);
 
@@ -90,6 +95,7 @@ String checkRepo() {
   httpsClient.end();
 
   if (checkForCommits(sha)) {
+    Serial.println(filename);
     return filename;
   } else {
     return "no commit";
@@ -99,16 +105,16 @@ String checkRepo() {
 void handleAction(Namespace nameSpace) {
   if (nameSpace == TEST) {
     playCommitSound();
-    flashLed(COMMIT_LED);
+    flashLed(COMMIT_LED_TEST);
   }
   if (nameSpace == PROD) {
     playCommitSound();
     Serial.println("PROD");
-    flashLed(COMMIT_LED);
+    flashLed(COMMIT_LED_PROD);
   }
   if (nameSpace == SYSTEST) {
     playCommitSound();
-    flashLed(COMMIT_LED);
+    flashLed(COMMIT_LED_SYSTEST);
   }
   if (nameSpace == NONE) {
     Serial.println("Do nothing!");
@@ -160,23 +166,17 @@ void playBuzzer() {
   noTone(BUZZER);
 }
 
-void flashLed() {
-  for (int i=0;i<10;i++) {
-    digitalWrite(COMMIT_LED, HIGH);
-    delay(150);
-    digitalWrite(COMMIT_LED, LOW);
-    delay(150);
-    }
-}
-
 Namespace whatNamespace(String filename) {
-  if (filename.indexOf("test") >= 0) {
+  if (filename.indexOf("minid/test") >= 0) {
+    Serial.println("TEST");
     return TEST;
   }
-  if (filename.indexOf("prod") >= 0) {
+  if (filename.indexOf("minid/prod") >= 0) {
+    Serial.println("PROD");
     return PROD;
   }
-  if (filename.indexOf("systest") >= 0) {
+  if (filename.indexOf("minid/systest") >= 0) {
+    Serial.println("SYSTEST");
     return SYSTEST;
   }
   if (filename.indexOf("no commit") >= 0) {
