@@ -73,23 +73,26 @@ void loop() {
   unsigned long currentMillis = millis();
 
   checkButtonState();
-  
+
   if (currentMillis - previousMillis >= interval) {
     previousMillis = currentMillis;
 
-    if (wifiMulti.run(connectTimeoutMs) == WL_CONNECTED) {
-      Serial.print("WiFi connected: ");
-      Serial.print(WiFi.SSID());
-      Serial.print(" ");
-      Serial.println(WiFi.localIP());
-      digitalWrite(WIFI_LED, HIGH);
-
-      handleAction(whatNamespace(checkRepo()));
-    } else {
-      Serial.println("WiFi not connected!");
+    if (WiFi.status() != WL_CONNECTED) {
+      if (wifiMulti.run(connectTimeoutMs) == WL_CONNECTED) {
+        Serial.print("WiFi connected: ");
+        Serial.print(WiFi.SSID());
+        Serial.print(" ");
+        Serial.println(WiFi.localIP());
+        digitalWrite(WIFI_LED, HIGH);
+      } else {
+        Serial.println("WiFi not connected!");
+      }
     }
+
+    handleAction(whatNamespace(checkRepo()));
   }
 }
+
 
 void checkButtonState() {
   int reading = digitalRead(BUTTON);
@@ -104,17 +107,7 @@ void checkButtonState() {
       buttonState = reading;
 
       if (buttonState == HIGH) {
-        Serial.println("HIGH");
-        if(isMuted == false) {
-          flashLed(COMMIT_LED_PROD);
-          isMuted = true;
-          Serial.println("MUTE");
-          flashLed(COMMIT_LED_PROD);
-        }else {
-          isMuted = false;
-          playPRODSound();
-          Serial.println("NOT MUTE");
-        }
+        playPRODSound();
       }
     }
   }
@@ -127,19 +120,16 @@ String checkRepo() {
   httpsClient.begin(client, endpoint);
   httpsClient.addHeader("Authorization", "token " + token);
   int httpCode = httpsClient.GET();
-  Serial.println(httpCode);
-  //String payload* = httpsClient.getString();
-  //Serial.println(payload);
+  StaticJsonDocument<200> filter;
+  filter["sha"] = true;
+  filter["files"] = true;
   DynamicJsonDocument doc(6144);
-  Serial.println(doc.capacity());
-  DeserializationError error = deserializeJson(doc, httpsClient.getStream());
+  DeserializationError error = deserializeJson(doc, httpsClient.getStream(), DeserializationOption::Filter(filter));
 
   if (error) {
     Serial.print("deserializeJson() failed: ");
     Serial.println(error.c_str());
-    flashLed(COMMIT_LED_TEST);
-    flashLed(COMMIT_LED_PROD);
-    flashLed(COMMIT_LED_SYSTEST);
+    slowFlashLed(COMMIT_LED_TEST);
     return "<error>";
   }
 
@@ -157,21 +147,15 @@ String checkRepo() {
 
 void handleAction(Namespace nameSpace) {
   if (nameSpace == TEST) {
-    if (!isMuted) {
     playTESTSound();
-    }
     flashLed(COMMIT_LED_TEST);
   }
   if (nameSpace == PROD) {
-    if (!isMuted) {
-      playPRODSound();
-    }
+    playPRODSound();
     flashLed(COMMIT_LED_PROD);
   }
   if (nameSpace == SYSTEST) {
-    if (!isMuted) {
     playSYSTESTSound();
-    }
     flashLed(COMMIT_LED_SYSTEST);
   }
   if (nameSpace == NONE) {
@@ -187,12 +171,22 @@ void flashLed(int led) {
   }
 }
 
+void slowFlashLed(int led) {
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(led, HIGH);
+    delay(1000);
+    digitalWrite(led, LOW);
+    delay(1000);
+  }
+}
+
 void blinkWifi() {
   digitalWrite(WIFI_LED, LOW);
   delay(150);
   digitalWrite(WIFI_LED, HIGH);
   delay(150);
 }
+
 
 void playTESTSound() {
   tone(BUZZER, NOTE_E4);
@@ -242,15 +236,12 @@ void toggleMute() {
 
 Namespace whatNamespace(String filename) {
   if (filename.indexOf("minid/test") >= 0) {
-    Serial.println("TEST");
     return TEST;
   }
   if (filename.indexOf("minid/prod") >= 0) {
-    Serial.println("PROD");
     return PROD;
   }
   if (filename.indexOf("minid/systest") >= 0) {
-    Serial.println("SYSTEST");
     return SYSTEST;
   }
   if (filename.indexOf("no commit") >= 0) {
@@ -285,13 +276,8 @@ void playPRODSound() {
       noteDuration *= 1.5; // increases the duration in half for dotted notes
     }
 
-    // we only play the note for 90% of the duration, leaving 10% as a pause
     tone(BUZZER, melody[thisNote], noteDuration * 0.9);
-
-    // Wait for the specief duration before playing the next note.
     delay(noteDuration);
-
-    // stop the waveform generation before the next note.
     noTone(BUZZER);
   }
 }
@@ -344,13 +330,9 @@ void playBUZZERSound() {
       noteDuration *= 1.5; // increases the duration in half for dotted notes
     }
 
-    // we only play the note for 90% of the duration, leaving 10% as a pause
+
     tone(BUZZER, melody[thisNote], noteDuration * 0.9);
-
-    // Wait for the specief duration before playing the next note.
     delay(noteDuration);
-
-    // stop the waveform generation before the next note.
     noTone(BUZZER);
 
   }
