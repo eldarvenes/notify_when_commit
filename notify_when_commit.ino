@@ -1,11 +1,13 @@
-#include "config3.h"
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include <ESP8266WiFiMulti.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
 #include "pitches.h"
 #include "Namespace.h"
+#include "config3.h"
 
 // Add config in config.h
 const char wifi_ssid[] = WIFI_SSID;
@@ -22,8 +24,6 @@ String saved_sha = "";
 WiFiClientSecure client;
 HTTPClient httpsClient;
 
-StaticJsonDocument<16> filter_sha;
-
 const uint8_t BUZZER = 4;
 const uint8_t BUTTON = 14;
 const uint8_t WIFI_LED = 5;
@@ -31,13 +31,11 @@ const uint8_t COMMIT_LED_PROD = 15;
 const uint8_t COMMIT_LED_TEST = 13;
 const uint8_t COMMIT_LED_SYSTEST = 12;
 
-bool isMuted = false;
 int buttonState;
 int lastButtonState = LOW;
 
 long lastDebounceTime = 0;
 long debounceDelay = 50;
-
 
 // wifi status
 int status = WL_IDLE_STATUS;
@@ -48,6 +46,10 @@ int dataPin = 16;
 int num[] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x67};
 
 int commitCount = 0;
+
+// Time
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
 
 void setup()
 {
@@ -67,12 +69,12 @@ void setup()
   pinMode(latchPin, OUTPUT);
   pinMode(dataPin, OUTPUT);
 
-  setSevenSegment(0);
+  resetSevenSegment();
+
+  timeClient.begin();
 
   WiFi.mode(WIFI_STA);
-
   wifiMulti.addAP(wifi_ssid, wifi_password);
-  filter_sha["sha"] = true;
   client.setInsecure();
 }
 
@@ -87,6 +89,8 @@ void loop() {
   if (currentMillis - previousMillis >= interval) {
     previousMillis = currentMillis;
 
+    checkIfCounterShouldBeReset();
+
     if (WiFi.status() != WL_CONNECTED) {
       if (wifiMulti.run(connectTimeoutMs) == WL_CONNECTED) {
         Serial.print("WiFi connected: ");
@@ -96,17 +100,47 @@ void loop() {
         digitalWrite(WIFI_LED, HIGH);
       } else {
         Serial.println("WiFi not connected!");
+        setSevenSegmentError();
+        digitalWrite(WIFI_LED, LOW);
       }
     }
-
     handleAction(whatNamespace(checkRepo()));
   }
+}
+
+// Reset counter and Segment at midnight
+void checkIfCounterShouldBeReset() {
+  timeClient.update();
+  int hour = timeClient.getHours();
+  int minute = timeClient.getMinutes();
+  if (hour == 22 && minute == 59) {
+    commitCount = 0;
+    resetSevenSegment();
+  }
+}
+
+void resetSevenSegment() {
+  setSevenSegment(0);
 }
 
 void setSevenSegment(int number) {
   digitalWrite(latchPin, LOW);
   shiftOut(dataPin, clockPin, MSBFIRST, num[number]);
   digitalWrite(latchPin, HIGH);
+}
+
+void setSevenSegmentError() {
+  digitalWrite(latchPin, LOW);
+  shiftOut(dataPin, clockPin, MSBFIRST, 0x79);
+  digitalWrite(latchPin, HIGH);
+}
+
+void increaseSegmentCounter() {
+  commitCount++;
+  if (commitCount > 9) {
+    commitCount = 0;
+  }
+  setSevenSegment(commitCount);
 }
 
 void checkButtonState() {
@@ -122,6 +156,7 @@ void checkButtonState() {
       buttonState = reading;
 
       if (buttonState == HIGH) {
+        increaseSegmentCounter();
         playPRODSound();
       }
     }
@@ -130,21 +165,21 @@ void checkButtonState() {
 }
 
 String checkRepo() {
-  blinkWifi();
+  quickFlashAllCommitLeds();
   httpsClient.useHTTP10(true);
   httpsClient.begin(client, endpoint);
   httpsClient.addHeader("Authorization", "token " + token);
   int httpCode = httpsClient.GET();
   StaticJsonDocument<200> filter;
   filter["sha"] = true;
-  filter["files"] = true;
+  filter["files"][0]["filename"] = true;
   DynamicJsonDocument doc(6144);
   DeserializationError error = deserializeJson(doc, httpsClient.getStream(), DeserializationOption::Filter(filter));
 
   if (error) {
     Serial.print("deserializeJson() failed: ");
     Serial.println(error.c_str());
-    slowFlashLed(COMMIT_LED_TEST);
+    setSevenSegmentError();
     return "<error>";
   }
 
@@ -163,14 +198,17 @@ String checkRepo() {
 void handleAction(Namespace nameSpace) {
   if (nameSpace == TEST) {
     playTESTSound();
+    //increaseSegmentCounter();
     flashLed(COMMIT_LED_TEST);
   }
   if (nameSpace == PROD) {
     playPRODSound();
+    increaseSegmentCounter();
     flashLed(COMMIT_LED_PROD);
   }
   if (nameSpace == SYSTEST) {
     playSYSTESTSound();
+    //increaseSegmentCounter();
     flashLed(COMMIT_LED_SYSTEST);
   }
   if (nameSpace == NONE) {
@@ -183,6 +221,19 @@ void flashLed(int led) {
     delay(150);
     digitalWrite(led, LOW);
     delay(150);
+  }
+}
+
+void quickFlashAllCommitLeds() {
+  for (int i = 0; i < 2; i++) {
+    digitalWrite(COMMIT_LED_SYSTEST, HIGH);
+    digitalWrite(COMMIT_LED_TEST, HIGH);
+    digitalWrite(COMMIT_LED_PROD, HIGH);
+    delay(30);
+    digitalWrite(COMMIT_LED_SYSTEST, LOW);
+    digitalWrite(COMMIT_LED_TEST, LOW);
+    digitalWrite(COMMIT_LED_PROD, LOW);
+    delay(30);
   }
 }
 
@@ -239,21 +290,10 @@ boolean checkForCommits(String sha) {
     if (sha.length() > 5 && sha != saved_sha) {
       Serial.println("New sha detected: " + sha);
       saved_sha = sha;
-
-      if (commitCount > 9) {
-        commitCount = 0;
-      }
-      commitCount++;
-      setSevenSegment(commitCount);
-
       return true;
     }
     return false;
   }
-}
-
-void toggleMute() {
-  isMuted = !isMuted;
 }
 
 Namespace whatNamespace(String filename) {
