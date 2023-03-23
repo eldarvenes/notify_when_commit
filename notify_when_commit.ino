@@ -1,4 +1,4 @@
-#include "config2.h"
+#include "config3.h"
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
@@ -23,7 +23,6 @@ WiFiClientSecure client;
 HTTPClient httpsClient;
 
 StaticJsonDocument<16> filter_sha;
-//StaticJsonDocument<64> doc;
 
 const uint8_t BUZZER = 4;
 const uint8_t BUTTON = 14;
@@ -43,6 +42,13 @@ long debounceDelay = 50;
 // wifi status
 int status = WL_IDLE_STATUS;
 
+int clockPin = 3;
+int latchPin = 0;
+int dataPin = 16;
+int num[] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x67};
+
+int commitCount = 0;
+
 void setup()
 {
   Serial.begin(9600);
@@ -57,7 +63,11 @@ void setup()
   pinMode(COMMIT_LED_PROD, OUTPUT);
   pinMode(COMMIT_LED_TEST, OUTPUT);
   pinMode(COMMIT_LED_SYSTEST, OUTPUT);
+  pinMode(clockPin, OUTPUT);
+  pinMode(latchPin, OUTPUT);
+  pinMode(dataPin, OUTPUT);
 
+  setSevenSegment(0);
 
   WiFi.mode(WIFI_STA);
 
@@ -93,6 +103,11 @@ void loop() {
   }
 }
 
+void setSevenSegment(int number) {
+  digitalWrite(latchPin, LOW);
+  shiftOut(dataPin, clockPin, MSBFIRST, num[number]);
+  digitalWrite(latchPin, HIGH);
+}
 
 void checkButtonState() {
   int reading = digitalRead(BUTTON);
@@ -224,6 +239,13 @@ boolean checkForCommits(String sha) {
     if (sha.length() > 5 && sha != saved_sha) {
       Serial.println("New sha detected: " + sha);
       saved_sha = sha;
+
+      if (commitCount > 9) {
+        commitCount = 0;
+      }
+      commitCount++;
+      setSevenSegment(commitCount);
+
       return true;
     }
     return false;
